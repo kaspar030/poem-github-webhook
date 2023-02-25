@@ -9,7 +9,7 @@ use poem::{
     Body, Endpoint, EndpointExt, Error, IntoResponse, Middleware, Request, Response, Result, Route,
 };
 
-use crate::payload::{IssueCommentPayload, Payload};
+use crate::payload::{DispatchedPayload, IssueCommentPayload, Payload};
 
 pub struct GithubWebhook {
     secret: String,
@@ -88,18 +88,17 @@ fn dispatch(headers: &HeaderMap, json: Json<Payload>) -> Result<String> {
         let event_type = headers.get("X-Github-Event").ok_or("missing header")?;
 
         let event_type = event_type.to_str()?;
-
-        match event_type {
-            "ping" => tracing::info!("got ping"),
-            "issue_comment" => {
-                let issue: IssueCommentPayload = json.0.try_into()?;
-                tracing::info!("got issue comment {:?}", issue.action);
+        let dispatched = DispatchedPayload::from(json.0, event_type)?;
+        match dispatched {
+            DispatchedPayload::Ping => tracing::info!("got ping"),
+            DispatchedPayload::IssueComment(issue_comment) => {
+                tracing::info!("got issue comment {:?}", issue_comment.action)
             }
-            "issues" => {
-                tracing::info!("got issue {:?}", json.action);
+            DispatchedPayload::Issue(issue) => {
+                tracing::info!("got issue {:?}", issue.action)
             }
-            _ => tracing::warn!("unknown event \"{event_type}\" (ignored)"),
         }
+
         Ok("OK".into())
     }
 

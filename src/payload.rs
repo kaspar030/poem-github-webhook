@@ -62,6 +62,40 @@ impl TryInto<IssueCommentPayload> for Payload {
     }
 }
 
+/// [`IssuePayload`] is a specialized version of [`Payload`] for the
+/// `Issue` event.
+///
+/// Notably, the `Option<T>` fields on [`Payload`] that should always be present
+/// in the case of this event are now `T`. Because conversion can fail in case
+/// the fields on the original [`Payload`] are `None`, conversion happens
+/// through the [`TryInto`](::std::convert::TryInto) trait.
+pub struct IssuePayload {
+    /// The action (created/edited/deleted/opened/closed) that triggered the webhook.
+    pub action: Action,
+    /// The account that triggered the action that triggered the webhook.
+    pub sender: User,
+    /// The issue the comment was placed on.
+    pub issue: Issue,
+    /// The repository the issue belongs to.
+    pub repository: Repository,
+}
+
+impl TryInto<IssuePayload> for Payload {
+    type Error = Error;
+
+    fn try_into(self) -> Result<IssuePayload, Self::Error> {
+        let issue = self.issue.ok_or(Error::MissingIssuePayload)?;
+        let action = self.action.ok_or(Error::MissingActionPayload)?;
+
+        Ok(IssuePayload {
+            sender: self.sender,
+            repository: self.repository,
+            action,
+            issue,
+        })
+    }
+}
+
 /// The errors that can occur interpreting the webhook payload.
 #[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
@@ -77,6 +111,10 @@ pub enum Error {
     /// this field in the webhook payload but it didn't.
     #[error("Expected field \"action\" not found in webhook payload")]
     MissingActionPayload,
+    /// The event type indicated in the `X-Github-Event` header should include
+    /// this field in the webhook payload but it didn't.
+    #[error("Unhandled or unknown event type `{0}`")]
+    UnhandledEventType(String),
 }
 
 /// Action represents the action the Github webhook is send for.
@@ -91,4 +129,25 @@ pub enum Action {
     Deleted,
     /// The something has been opened.
     Opened,
+    /// The something has been opened.
+    Closed,
+    /// The something has been reopened.
+    Reopened,
+}
+
+pub enum DispatchedPayload {
+    Ping,
+    Issue(IssuePayload),
+    IssueComment(IssueCommentPayload),
+}
+
+impl DispatchedPayload {
+    pub fn from(p: Payload, event_type: &str) -> Result<DispatchedPayload, Error> {
+        match event_type {
+            "ping" => Ok(Self::Ping),
+            "issue_comment" => Ok(Self::IssueComment(p.try_into()?)),
+            "issues" => Ok(Self::Issue(p.try_into()?)),
+            _ => Err(Error::UnhandledEventType(event_type.into())),
+        }
+    }
 }
