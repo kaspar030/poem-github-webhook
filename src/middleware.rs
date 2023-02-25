@@ -1,15 +1,12 @@
-use anyhow::anyhow;
 use poem::{
     async_trait,
-    error::{BadRequest, GetDataError, InternalServerError},
+    error::{BadRequest, InternalServerError},
     handler,
-    http::{request, HeaderMap, StatusCode},
-    post,
-    web::Json,
-    Body, Endpoint, EndpointExt, Error, IntoResponse, Middleware, Request, Response, Result, Route,
+    http::{HeaderMap, StatusCode},
+    post, Endpoint, EndpointExt, Error, IntoResponse, Middleware, Request, Response, Result, Route,
 };
 
-use crate::payload::{IssueCommentPayload, Payload};
+use crate::payload::Payload;
 
 pub struct GithubWebhook {
     secret: String,
@@ -80,30 +77,36 @@ impl<E: Endpoint> Endpoint for GithubWebhookImpl<E> {
 }
 
 #[handler]
-fn dispatch(headers: &HeaderMap, json: Json<Payload>) -> Result<String> {
+fn dispatch(headers: &HeaderMap, body: String) -> Result<String> {
     fn inner(
         headers: &HeaderMap,
-        json: Json<Payload>,
+        body: String,
     ) -> std::result::Result<String, Box<dyn std::error::Error>> {
         let event_type = headers.get("X-Github-Event").ok_or("missing header")?;
-
         let event_type = event_type.to_str()?;
+        tracing::info!("event_type: {event_type}");
 
-        match event_type {
-            "ping" => tracing::info!("got ping"),
-            "issue_comment" => {
-                let issue: IssueCommentPayload = json.0.try_into()?;
-                tracing::info!("got issue comment {:?}", issue.action);
+        let dispatched = Payload::from(&body, event_type)?;
+        match dispatched {
+            Payload::Ping => tracing::info!("got ping"),
+            Payload::IssueComment(issue_comment) => {
+                tracing::info!("got issue comment {:?}", issue_comment.action)
             }
-            "issues" => {
-                tracing::info!("got issue {:?}", json.action);
+            Payload::Issue(issue) => {
+                tracing::info!("got issue {:?}", issue.action)
             }
-            _ => tracing::warn!("unknown event \"{event_type}\" (ignored)"),
+            Payload::PullRequest(pull_request) => {
+                tracing::info!("got PR {:?}", pull_request.action)
+            }
+            Payload::Push(push) => {
+                tracing::info!("got push to {:?}", push._ref)
+            }
         }
+
         Ok("OK".into())
     }
 
-    inner(headers, json).map_err(|err| {
+    inner(headers, body).map_err(|err| {
         tracing::warn!("error: {err}");
         Error::from_status(StatusCode::BAD_REQUEST)
     })

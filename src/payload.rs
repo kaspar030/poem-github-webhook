@@ -1,36 +1,30 @@
-use octocrab::models::{issues::Comment, issues::Issue, Repository, User};
+use octocrab::models::{
+    events::payload::Commit, issues::Comment, issues::Issue, pulls::PullRequest, Repository, User,
+};
 use serde::Deserialize;
-use std::convert::TryInto;
 
-/// [`Payload`] represents the (JSON) payload of the webhook Github send us.
-///
-/// Every webhook includes this payload. The presence of the `Option`al fields
-/// depends on the event type this payload was send for.
-///
-/// For some event types there exists a specialized type with `Option<T>`
-/// changed for `T` where possible. Conversion from [`Payload`] to a more
-/// specialized type can be done through `TryInto` implementations.
+use reqwest::Url;
+use std::error::Error;
+
 #[derive(Deserialize, Debug)]
-pub struct Payload {
-    /// The account that triggered the action that triggered the webhook.
-    pub sender: User,
-    /// The repository associated with the webhook.
-    pub repository: Repository,
-    /// The comment involved in the action. Only present for some event types.
-    pub comment: Option<Comment>,
-    /// The action (created/edited/deleted) that triggered the webhook.
-    pub action: Option<Action>,
-    /// The issue involved in the action. Only present for some event types.
-    pub issue: Option<Issue>,
+pub struct PushPayload {
+    //    pub sender: User,
+    //    pub repository: Repository,
+    //pub pusher: ..
+    #[serde(rename = "ref")]
+    pub _ref: String,
+    pub before: String,
+    pub after: String,
+    pub created: bool,
+    pub deleted: bool,
+    pub forced: bool,
+    pub base_ref: String,
+    pub compare: Url,
+    pub commits: Vec<Commit>,
+    pub head_commit: Commit,
 }
 
-/// [`IssueCommentPayload`] is a specialized version of [`Payload`] for the
-/// `IssueComment` event.
-///
-/// Notably, the `Option<T>` fields on [`Payload`] that should always be present
-/// in the case of this event are now `T`. Because conversion can fail in case
-/// the fields on the original [`Payload`] are `None`, conversion happens
-/// through the [`TryInto`](::std::convert::TryInto) trait.
+#[derive(Deserialize, Debug)]
 pub struct IssueCommentPayload {
     /// The action (created/edited/deleted) that triggered the webhook.
     pub action: Action,
@@ -44,41 +38,29 @@ pub struct IssueCommentPayload {
     pub repository: Repository,
 }
 
-impl TryInto<IssueCommentPayload> for Payload {
-    type Error = Error;
-
-    fn try_into(self) -> Result<IssueCommentPayload, Self::Error> {
-        let comment = self.comment.ok_or(Error::MissingCommentPayload)?;
-        let issue = self.issue.ok_or(Error::MissingIssuePayload)?;
-        let action = self.action.ok_or(Error::MissingActionPayload)?;
-
-        Ok(IssueCommentPayload {
-            sender: self.sender,
-            repository: self.repository,
-            action,
-            comment,
-            issue,
-        })
-    }
+#[derive(Deserialize, Debug)]
+pub struct IssuePayload {
+    /// The action (created/edited/deleted/opened/closed) that triggered the webhook.
+    pub action: Action,
+    /// The account that triggered the action that triggered the webhook.
+    pub sender: User,
+    /// The issue the comment was placed on.
+    pub issue: Issue,
+    /// The repository the issue belongs to.
+    pub repository: Repository,
 }
 
-/// The errors that can occur interpreting the webhook payload.
-#[derive(thiserror::Error, Clone, Debug)]
-pub enum Error {
-    /// The event type indicated in the `X-Github-Event` header should include
-    /// this field in the webhook payload but it didn't.
-    #[error("Expected field \"comment\" not found in webhook payload")]
-    MissingCommentPayload,
-    /// The event type indicated in the `X-Github-Event` header should include
-    /// this field in the webhook payload but it didn't.
-    #[error("Expected field \"issue\" not found in webhook payload")]
-    MissingIssuePayload,
-    /// The event type indicated in the `X-Github-Event` header should include
-    /// this field in the webhook payload but it didn't.
-    #[error("Expected field \"action\" not found in webhook payload")]
-    MissingActionPayload,
+#[derive(Deserialize, Debug)]
+pub struct PullRequestPayload {
+    /// The action (created/edited/deleted/opened/closed) that triggered the webhook.
+    pub action: Action,
+    /// The account that triggered the action that triggered the webhook.
+    pub sender: User,
+    /// The pull_request this payload is about.
+    pub pull_request: PullRequest,
+    /// The repository the pull request belongs to.
+    pub repository: Repository,
 }
-
 /// Action represents the action the Github webhook is send for.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -91,4 +73,39 @@ pub enum Action {
     Deleted,
     /// The something has been opened.
     Opened,
+    /// The something has been opened.
+    Closed,
+    /// The something has been reopened.
+    Reopened,
+    /// The something has been synchronized.
+    Synchronized,
+}
+
+pub enum Payload {
+    Ping,
+    Issue(IssuePayload),
+    IssueComment(IssueCommentPayload),
+    PullRequest(PullRequestPayload),
+    Push(PushPayload),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum PayloadError {
+    #[error("unhandled event type `{0}`")]
+    UnhandledEventType(String),
+}
+
+impl Payload {
+    pub fn from(p: &str, event_type: &str) -> Result<Payload, Box<dyn Error>> {
+        match event_type {
+            "ping" => Ok(Self::Ping),
+            "issue_comment" => Ok(Self::IssueComment(serde_json::from_str(p)?)),
+            "issues" => Ok(Self::Issue(serde_json::from_str(p)?)),
+            "pull_request" => Ok(Self::PullRequest(serde_json::from_str(p)?)),
+            "push" => Ok(Self::Push(serde_json::from_str(p)?)),
+            _ => Err(Box::new(PayloadError::UnhandledEventType(
+                event_type.into(),
+            ))),
+        }
+    }
 }
