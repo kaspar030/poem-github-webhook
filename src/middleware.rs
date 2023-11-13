@@ -1,3 +1,5 @@
+use anyhow::anyhow;
+
 use poem::{
     async_trait,
     error::{BadRequest, InternalServerError},
@@ -6,7 +8,7 @@ use poem::{
     post, Endpoint, EndpointExt, Error, IntoResponse, Middleware, Request, Response, Result, Route,
 };
 
-use crate::payload::Payload;
+use octocrab::models::webhook_events::{WebhookEvent, WebhookEventPayload, WebhookEventType};
 
 pub struct GithubWebhook {
     secret: String,
@@ -86,20 +88,24 @@ fn dispatch(headers: &HeaderMap, body: String) -> Result<String> {
         let event_type = event_type.to_str()?;
         tracing::info!("event_type: {event_type}");
 
-        let dispatched = Payload::from(&body, event_type)?;
-        match dispatched {
-            Payload::Ping => tracing::info!("got ping"),
-            Payload::IssueComment(issue_comment) => {
+        let event = WebhookEvent::try_from_header_and_body(event_type, &body)?;
+        match event.specific {
+            WebhookEventPayload::Ping(ping_event) => tracing::info!("got ping"),
+            WebhookEventPayload::IssueComment(issue_comment) => {
                 tracing::info!("got issue comment {:?}", issue_comment.action)
             }
-            Payload::Issue(issue) => {
-                tracing::info!("got issue {:?}", issue.action)
+            WebhookEventPayload::Issues(issues) => {
+                tracing::info!("got issue {:?}", issues.action)
             }
-            Payload::PullRequest(pull_request) => {
+            WebhookEventPayload::PullRequest(pull_request) => {
                 tracing::info!("got PR {:?}", pull_request.action)
             }
-            Payload::Push(push) => {
-                tracing::info!("got push to {:?}", push._ref)
+            WebhookEventPayload::Push(push) => {
+                tracing::info!("got push to {:?}", push.r#ref)
+            }
+            _ => {
+                tracing::warn!("got unhandled payload for {}", event_type);
+                return Err(anyhow!("unhandled event type").into());
             }
         }
 

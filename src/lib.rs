@@ -1,5 +1,4 @@
 mod middleware;
-mod payload;
 
 pub use middleware::GithubWebhook;
 
